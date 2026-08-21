@@ -5,6 +5,7 @@ Capacidades:
 - update_incident(): actualizar incidente por número o sys_id.
 - get_incident_by_number(): consultar incidente por número.
 - add_comment(): agregar comentario o work note.
+- get_choice_values(): consultar valores válidos de un campo choice (ej. close_code).
 
 El conector usa Basic Auth contra la Table API de ServiceNow. No implementa
 eliminación de incidentes.
@@ -19,6 +20,30 @@ from requests import Response
 from .config import ServicenowConfig
 from .exceptions import ServicenowAuthError, ServicenowDataError, ServicenowNetworkError
 from .logging_utils import get_logger
+
+# Indicios en el cuerpo de un 401/403 de que el rechazo es por una regla de negocio
+# (Data Policy, Business Rule, ACL, campo obligatorio) y no por autenticación.
+_DATA_POLICY_INDICATORS = (
+    "data policy",
+    "business rule",
+    "mandatory",
+    "obligatorio",
+    "required field",
+    "campo requerido",
+    "acl",
+    "access control",
+)
+
+# Indicios de que el rechazo sí es por credenciales, token o usuario.
+_AUTH_INDICATORS = (
+    "invalid credentials",
+    "invalid username or password",
+    "user is not active",
+    "authentication failed",
+    "not authenticated",
+    "login failure",
+    "user not authorized to login",
+)
 
 
 class ServicenowClient:
@@ -44,11 +69,35 @@ class ServicenowClient:
         clean = path if path.startswith("/") else f"/{path}"
         return self.config.base_url + clean
 
+    def _extract_error_message(self, response: Response) -> str:
+        """Extrae el mensaje de error real del cuerpo de respuesta de ServiceNow."""
+        try:
+            payload = response.json()
+        except ValueError:
+            return response.text[:500]
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict):
+                message = error.get("message") or ""
+                detail = error.get("detail") or ""
+                combined = " ".join(part for part in (message, detail) if part)
+                if combined:
+                    return combined
+        return response.text[:500]
+
     def _handle_response(self, response: Response) -> Any:
         if response.status_code in {401, 403}:
+            error_text = self._extract_error_message(response)
+            lowered = error_text.lower()
+            is_data_policy = any(keyword in lowered for keyword in _DATA_POLICY_INDICATORS)
+            is_auth = any(keyword in lowered for keyword in _AUTH_INDICATORS)
+            if response.status_code == 403 and is_data_policy and not is_auth:
+                raise ServicenowDataError(
+                    "ServiceNow rechazó la operación por una regla de negocio "
+                    f"(Data Policy/Business Rule/ACL), no por autenticación: {error_text}"
+                )
             raise ServicenowAuthError(
-                f"ServiceNow rechazó autenticación o permisos ({response.status_code}). "
-                "Revisa usuario, contraseña y roles sobre incident."
+                f"ServiceNow rechazó autenticación o permisos ({response.status_code}): {error_text}"
             )
         if response.status_code == 404:
             raise ServicenowDataError("Recurso ServiceNow no encontrado. Verifica sys_id, número o endpoint.")
@@ -69,18 +118,14 @@ class ServicenowClient:
         path: str,
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
-        extra_headers: dict[str, str] | None = None,
     ) -> Any:
-        headers = dict(self._session.headers)
-        if extra_headers:
-            headers.update(extra_headers)
         try:
             response = self._session.request(
                 method=method.upper(),
                 url=self._url(path),
                 json=json_body,
                 params={k: v for k, v in (params or {}).items() if v is not None},
-                headers=headers,
+                headers=dict(self._session.headers),
                 timeout=self.config.timeout,
                 verify=self.config.verify_ssl,
             )
@@ -136,13 +181,11 @@ class ServicenowClient:
             payload["description"] = description
         if priority is not None:
             payload["priority"] = str(priority)
-        extra_headers = {"X-Transaction": "skip"} if self.config.skip_transaction else None
         data = self._request(
             "POST",
             "/incident",
             json_body=payload,
             params={"sysparm_fields": "sys_id,number,short_description,state,urgency,impact,priority"},
-            extra_headers=extra_headers,
         )
         result = data.get("result", data) if isinstance(data, dict) else data
         self._logger.info("Incidente ServiceNow creado")
@@ -156,6 +199,7 @@ class ServicenowClient:
             "sysparm_query": f"number={number.strip()}",
             "sysparm_limit": 1,
             "sysparm_fields": "sys_id,number,short_description,description,state,urgency,impact,priority,comments,work_notes",
+            "sysparm_display_value": "true",
         }
         data = self._request("GET", "/incident", params=params)
         results = data.get("result", []) if isinstance(data, dict) else []
@@ -175,7 +219,10 @@ class ServicenowClient:
             "PATCH",
             f"/incident/{sys_id}",
             json_body=fields,
-            params={"sysparm_fields": "sys_id,number,short_description,state,urgency,impact,priority,comments,work_notes"},
+            params={
+                "sysparm_fields": "sys_id,number,short_description,state,urgency,impact,priority,comments,work_notes",
+                "sysparm_display_value": "true",
+            },
         )
         result = data.get("result", data) if isinstance(data, dict) else data
         self._logger.info("Incidente ServiceNow actualizado")
@@ -187,3 +234,20 @@ class ServicenowClient:
             raise ServicenowDataError("comment no puede estar vacío.")
         field = "work_notes" if work_note else "comments"
         return self.update_incident(identifier, {field: comment}, by_number=by_number)
+
+    def get_choice_values(self, table: str, field: str) -> list[dict[str, str]]:
+        """Consulta en sys_choice los valores válidos de un campo choice en esta instancia.
+
+        Los valores de campos choice (por ejemplo incident.close_code o incident.state)
+        varían entre instancias ServiceNow: no asumas que un valor "estándar" existe.
+        """
+        if not table.strip() or not field.strip():
+            raise ServicenowDataError("table y field no pueden estar vacíos.")
+        params = {
+            "sysparm_query": f"name={table.strip()}^element={field.strip()}",
+            "sysparm_fields": "value,label",
+        }
+        data = self._request("GET", "/sys_choice", params=params)
+        results = data.get("result", []) if isinstance(data, dict) else []
+        self._logger.info("Choices ServiceNow consultados")
+        return [dict(item) for item in results]

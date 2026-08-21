@@ -24,8 +24,7 @@
         {"key": "password", "label": "Contraseña", "type": "password", "secret": true, "required": true},
         {"key": "verify_ssl", "label": "Verificar SSL", "type": "boolean", "required": false, "default": "true"},
         {"key": "timeout", "label": "Timeout (segundos)", "type": "number", "required": false, "default": "20"},
-        {"key": "max_results", "label": "Máximo resultados", "type": "number", "required": false, "default": "100"},
-        {"key": "skip_transaction", "label": "Omitir transacción al crear incidentes", "type": "boolean", "required": false, "default": "false", "help_text": "Solo para pruebas/desarrollo si la instancia developer presenta timeout al crear incidentes. No recomendado por defecto en producción."}
+        {"key": "max_results", "label": "Máximo resultados", "type": "number", "required": false, "default": "100"}
       ]
     }
   ],

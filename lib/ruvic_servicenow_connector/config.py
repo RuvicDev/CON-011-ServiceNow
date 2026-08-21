@@ -33,7 +33,6 @@ class ServicenowConfig:
     verify_ssl: bool = True
     timeout: int = 20
     max_results: int = 100
-    skip_transaction: bool = False
 
     @property
     def base_url(self) -> str:
@@ -77,7 +76,6 @@ class ServicenowConfig:
             timeout = int(os.environ.get(f"{ENV_PREFIX}TIMEOUT", "20").strip() or "20")
             max_results = int(os.environ.get(f"{ENV_PREFIX}MAX_RESULTS", "100").strip() or "100")
             verify_ssl = _to_bool(os.environ.get(f"{ENV_PREFIX}VERIFY_SSL", "true"), default=True)
-            skip_transaction = _to_bool(os.environ.get(f"{ENV_PREFIX}SKIP_TRANSACTION", "false"), default=False)
         except ValueError as exc:
             raise ServicenowConfigError("TIMEOUT y MAX_RESULTS deben ser enteros.") from exc
         if timeout <= 0 or timeout > 120:
@@ -91,5 +89,4 @@ class ServicenowConfig:
             verify_ssl=verify_ssl,
             timeout=timeout,
             max_results=max_results,
-            skip_transaction=skip_transaction,
         )

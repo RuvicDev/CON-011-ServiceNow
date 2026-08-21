@@ -24,7 +24,6 @@ El código generado NUNCA hardcodea credenciales. Siempre se leen de variables d
 | `RUVIC_SERVICENOW_VERIFY_SSL` | Verificación SSL opcional |
 | `RUVIC_SERVICENOW_TIMEOUT` | Timeout opcional |
 | `RUVIC_SERVICENOW_MAX_RESULTS` | Máximo de resultados |
-| `RUVIC_SERVICENOW_SKIP_TRANSACTION` | Opcional. Solo pruebas/dev: `X-Transaction: skip` al crear incidentes |
 
 Si estas variables NO existen, el conector no está configurado: no generes código que lo use; indica al usuario que lo configure en Settings → Conectores. Nunca uses variables con alias `_DEFAULT_`, `_TEST_` o `_PRODUCCION_`.
 
@@ -69,4 +68,4 @@ client.add_comment("INC0010001", "Se contactó al usuario y se está investigand
 3. Confirma con el usuario antes de crear o actualizar incidentes reales.
 4. Usa el número INC para operaciones del usuario final.
 5. No implementes eliminación de incidentes; no está soportada en este conector.
-6. No actives `RUVIC_SERVICENOW_SKIP_TRANSACTION=true` salvo en instancia developer/de prueba con timeout interno al crear incidentes; en producción puede omitir notificaciones, eventos o reglas.
+6. Los valores de campos tipo choice (como `close_code`, `state`) varían entre instancias de ServiceNow — no asumas que un valor "estándar" como `Solved (Permanently)` existe en la instancia del cliente. Si una operación falla o el campo queda vacío sin error visible, confirma los valores válidos con `client.get_choice_values("incident", "close_code")` (consulta `sys_choice`) antes de reintentar.

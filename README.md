@@ -19,11 +19,6 @@ Conector Ruvic para gestión de incidentes en ServiceNow: crear incidente, actua
 | `RUVIC_SERVICENOW_VERIFY_SSL` | No | Verificar SSL | `true` |
 | `RUVIC_SERVICENOW_TIMEOUT` | No | Timeout | `20` |
 | `RUVIC_SERVICENOW_MAX_RESULTS` | No | Máximo resultados | `100` |
-| `RUVIC_SERVICENOW_SKIP_TRANSACTION` | No | Envía `X-Transaction: skip` solo en creación | `false` |
-
-## Nota sobre instancias Developer y timeouts
-
-Algunas instancias ServiceNow Developer pueden devolver `Transaction cancelled: maximum execution time exceeded` al crear incidentes por reglas internas, SLAs o notificaciones. Para pruebas/desarrollo se puede activar `RUVIC_SERVICENOW_SKIP_TRANSACTION=true`, lo que envía el header `X-Transaction: skip` solo en `create_incident()`. No se recomienda habilitarlo por defecto en producción porque puede omitir eventos, notificaciones o reglas internas.
 
 ## Pruebas
 
@@ -37,3 +32,8 @@ python validate_local.py
 - Nunca subas usuario/contraseña al repositorio.
 - Usa una instancia developer o usuario de prueba.
 - No se implementa eliminación de incidentes.
+
+## Limitaciones conocidas
+
+- Si una instancia developer gratuita falla por timeout en la primera petición, es normal (arranque en frío) — reintenta la petición; no es un problema del conector.
+- Los valores de campos tipo choice (como `close_code`, `state`) varían entre instancias de ServiceNow. No asumas que un valor "estándar" (por ejemplo `Solved (Permanently)`) existe en la instancia del cliente: ServiceNow puede descartar en silencio un valor de choice inválido y dejar el campo vacío, lo que luego puede disparar un error de Data Policy por campo obligatorio faltante. Confirma los valores válidos con `client.get_choice_values(table, field)` antes de usarlos.

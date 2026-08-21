@@ -8,5 +8,16 @@ print("== Crear incidente =="); inc = client.create_incident("Prueba local Ruvic
 number = inc["number"]
 print("== Consultar por número =="); print(client.get_incident_by_number(number))
 print("== Actualizar incidente =="); print(client.update_incident(number, {"urgency": "2", "impact": "2"}))
-print("== Agregar comentario =="); print(client.add_comment(number, "Comentario agregado por validate_local.py", work_note=False))
+print("== Agregar comentario ==")
+comment_text = "Comentario agregado por validate_local.py"
+add_result = client.add_comment(number, comment_text, work_note=False)
+print(add_result)
+print("== Confirmar que el comentario se guardó (no solo que el PATCH devolvió 200) ==")
+confirmed = client.get_incident_by_number(number)
+if comment_text not in (confirmed.get("comments") or ""):
+    raise AssertionError(
+        f"El comentario agregado no aparece al consultar el incidente {number}: "
+        f"comments={confirmed.get('comments')!r}"
+    )
+print("Comentario confirmado en 'comments':", confirmed.get("comments"))
 print("Validación ServiceNow completa. Incidente:", number)
