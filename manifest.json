@@ -1,0 +1,36 @@
+{
+  "id": "servicenow",
+  "name": "ServiceNow",
+  "name_en": "ServiceNow",
+  "version": "1.0.0",
+  "description": "Gestión de incidentes en ServiceNow: crear incidente, actualizar incidente, consultar por número y comentar",
+  "description_en": "ServiceNow incident management: create incident, update incident, retrieve by number and add comments",
+  "category": "ITSM / Ticketing",
+  "category_en": "ITSM / Ticketing",
+  "keywords": ["servicenow", "incident", "incidente", "itsm", "ticketing", "comments"],
+  "icon": "icon.svg",
+  "library": {
+    "package": "ruvic-servicenow-connector",
+    "install": "pip install git+https://github.com/tu-org/conector-servicenow.git#subdirectory=lib",
+    "import_name": "ruvic_servicenow_connector"
+  },
+  "auth_modes": [
+    {
+      "id": "basic_auth",
+      "label": "Usuario y contraseña",
+      "fields": [
+        {"key": "instance_url", "label": "URL o instancia ServiceNow", "type": "text", "required": true, "placeholder": "https://dev12345.service-now.com"},
+        {"key": "username", "label": "Usuario", "type": "text", "required": true},
+        {"key": "password", "label": "Contraseña", "type": "password", "secret": true, "required": true},
+        {"key": "verify_ssl", "label": "Verificar SSL", "type": "boolean", "required": false, "default": "true"},
+        {"key": "timeout", "label": "Timeout (segundos)", "type": "number", "required": false, "default": "20"},
+        {"key": "max_results", "label": "Máximo resultados", "type": "number", "required": false, "default": "100"},
+        {"key": "skip_transaction", "label": "Omitir transacción al crear incidentes", "type": "boolean", "required": false, "default": "false", "help_text": "Solo para pruebas/desarrollo si la instancia developer presenta timeout al crear incidentes. No recomendado por defecto en producción."}
+      ]
+    }
+  ],
+  "env_prefix": "RUVIC_SERVICENOW_",
+  "operations": ["ticket.create_incident", "ticket.update_incident", "ticket.get_incident_by_number", "ticket.add_comment"],
+  "test_connection": true,
+  "docs": {"skill": "SKILL.md", "permissions_note": "El usuario ServiceNow necesita permisos/roles para leer, crear y actualizar registros de la tabla incident, además de escribir comments/work_notes."}
+}
