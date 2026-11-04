@@ -12,6 +12,7 @@ eliminación de incidentes.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import requests
@@ -44,6 +45,74 @@ _AUTH_INDICATORS = (
     "login failure",
     "user not authorized to login",
 )
+
+
+# Formato de número de registro ServiceNow (INC0010001, CHG0000123...). Se valida
+# antes de armar sysparm_query para que no se puedan inyectar operadores (^OR, ^NQ...).
+_NUMBER_RE = re.compile(r"^[A-Za-z]{2,10}\d{4,12}$")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]{1,80}$")
+_SYS_ID_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+
+# Estados estándar de incident.state. Se aceptan el código o el nombre (inglés/español).
+_STATE_CODES = {"1": "New", "2": "In Progress", "3": "On Hold", "6": "Resolved", "7": "Closed", "8": "Canceled"}
+_STATE_ALIASES = {
+    "new": "1", "nuevo": "1",
+    "in progress": "2", "en progreso": "2", "en curso": "2",
+    "on hold": "3", "en espera": "3",
+    "resolved": "6", "resuelto": "6",
+    "closed": "7", "cerrado": "7",
+    "canceled": "8", "cancelled": "8", "cancelado": "8",
+}
+# Rangos válidos de los campos numéricos de prioridad.
+_NUMERIC_RANGES = {"urgency": (1, 3), "impact": (1, 3), "priority": (1, 5)}
+
+
+def _normalize_state(value: Any) -> str:
+    text = str(value).strip()
+    if text in _STATE_CODES:
+        return text
+    code = _STATE_ALIASES.get(text.lower())
+    if code:
+        return code
+    valid = ", ".join(f"{code} ({name})" for code, name in _STATE_CODES.items())
+    raise ServicenowDataError(f"Estado '{value}' no válido para incident.state. Valores válidos: {valid}.")
+
+
+def _normalize_range(field: str, value: Any) -> str:
+    low, high = _NUMERIC_RANGES[field]
+    try:
+        number: int | None = int(str(value).strip())
+    except ValueError:
+        number = None
+    if number is None or not low <= number <= high:
+        raise ServicenowDataError(f"{field} debe ser un número entre {low} y {high}; se recibió '{value}'.")
+    return str(number)
+
+
+def _normalize_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    """Valida nombres de campo y normaliza state/urgency/impact/priority."""
+    normalized: dict[str, Any] = {}
+    for key, value in fields.items():
+        if not isinstance(key, str) or not _IDENTIFIER_RE.match(key):
+            raise ServicenowDataError(f"Nombre de campo no válido: '{key}'.")
+        if key == "state":
+            normalized[key] = _normalize_state(value)
+        elif key in _NUMERIC_RANGES:
+            normalized[key] = _normalize_range(key, value)
+        else:
+            normalized[key] = value
+    return normalized
+
+
+def _validate_number(number: str) -> str:
+    clean = (number or "").strip()
+    if not clean:
+        raise ServicenowDataError("number no puede estar vacío.")
+    if not _NUMBER_RE.match(clean):
+        raise ServicenowDataError(
+            f"Número de incidente no válido: '{number}'. Usa el formato de ServiceNow, por ejemplo INC0010001."
+        )
+    return clean.upper()
 
 
 class ServicenowClient:
@@ -137,6 +206,34 @@ class ServicenowClient:
             raise ServicenowNetworkError(f"No se pudo conectar con ServiceNow: {exc}.") from exc
         return self._handle_response(response)
 
+    # Campos de diario: no se devuelven como columnas normales, pero son válidos al escribir.
+    _JOURNAL_FIELDS = frozenset({"comments", "work_notes"})
+
+    def _check_unknown_fields(self, keys: Any, sys_id: str | None = None) -> None:
+        """Falla si algún campo no existe en la tabla incident.
+
+        ServiceNow ignora en silencio los campos desconocidos al escribir y responde 200,
+        así que antes se leen esos campos: los que no existen no vuelven en la respuesta.
+        """
+        wanted = [k for k in keys if k not in self._JOURNAL_FIELDS]
+        if not wanted:
+            return
+        path = f"/incident/{sys_id}" if sys_id else "/incident"
+        params: dict[str, Any] = {"sysparm_fields": ",".join(["sys_id", *wanted])}
+        if not sys_id:
+            params["sysparm_limit"] = 1
+        data = self._request("GET", path, params=params)
+        result = data.get("result") if isinstance(data, dict) else None
+        record = result[0] if isinstance(result, list) and result else result
+        if not isinstance(record, dict) or not record:
+            return  # tabla vacía: no hay con qué comparar
+        unknown = [k for k in wanted if k not in record]
+        if unknown:
+            raise ServicenowDataError(
+                f"Campos inexistentes en la tabla incident: {', '.join(unknown)}. "
+                "Revisa el nombre técnico del campo (por ejemplo short_description, state, assigned_to)."
+            )
+
     def ping(self) -> bool:
         """Verifica conexión consultando incidentes con límite mínimo.
 
@@ -173,14 +270,16 @@ class ServicenowClient:
             raise ServicenowDataError("short_description no puede estar vacío.")
         payload: dict[str, Any] = {
             "short_description": short_description,
-            "urgency": str(urgency),
-            "impact": str(impact),
+            "urgency": urgency,
+            "impact": impact,
             **extra_fields,
         }
         if description:
             payload["description"] = description
         if priority is not None:
-            payload["priority"] = str(priority)
+            payload["priority"] = priority
+        payload = _normalize_fields(payload)
+        self._check_unknown_fields(extra_fields.keys())
         data = self._request(
             "POST",
             "/incident",
@@ -193,10 +292,9 @@ class ServicenowClient:
 
     def get_incident_by_number(self, number: str) -> dict[str, Any]:
         """Consulta un incidente por número, por ejemplo INC0010001."""
-        if not number.strip():
-            raise ServicenowDataError("number no puede estar vacío.")
+        number = _validate_number(number)
         params = {
-            "sysparm_query": f"number={number.strip()}",
+            "sysparm_query": f"number={number}",
             "sysparm_limit": 1,
             "sysparm_fields": "sys_id,number,short_description,description,state,urgency,impact,priority,comments,work_notes",
             "sysparm_display_value": "true",
@@ -214,7 +312,14 @@ class ServicenowClient:
             raise ServicenowDataError("identifier no puede estar vacío.")
         if not fields:
             raise ServicenowDataError("fields no puede estar vacío.")
-        sys_id = self.get_incident_by_number(identifier)["sys_id"] if by_number else identifier
+        fields = _normalize_fields(fields)
+        if by_number:
+            sys_id = self.get_incident_by_number(identifier)["sys_id"]
+        else:
+            sys_id = identifier.strip()
+            if not _SYS_ID_RE.match(sys_id):
+                raise ServicenowDataError(f"sys_id no válido: '{identifier}'. Debe tener 32 caracteres hexadecimales.")
+        self._check_unknown_fields(fields.keys(), sys_id=sys_id)
         data = self._request(
             "PATCH",
             f"/incident/{sys_id}",
@@ -243,6 +348,8 @@ class ServicenowClient:
         """
         if not table.strip() or not field.strip():
             raise ServicenowDataError("table y field no pueden estar vacíos.")
+        if not _IDENTIFIER_RE.match(table.strip()) or not _IDENTIFIER_RE.match(field.strip()):
+            raise ServicenowDataError("table y field solo pueden contener letras, números y guion bajo.")
         params = {
             "sysparm_query": f"name={table.strip()}^element={field.strip()}",
             "sysparm_fields": "value,label",

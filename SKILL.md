@@ -34,6 +34,18 @@ from ruvic_servicenow_connector import ServicenowClient
 client = ServicenowClient()
 ```
 
+## Valores válidos
+
+| Campo | Valores |
+|---|---|
+| `state` | 1 New, 2 In Progress, 3 On Hold, 6 Resolved, 7 Closed, 8 Canceled. Acepta el código o el nombre en inglés o español ("En progreso", "Resuelto", "Cerrado") |
+| `urgency` / `impact` | 1 (alta) a 3 (baja) |
+| `priority` | 1 a 5 |
+
+- El número de incidente debe tener el formato de ServiceNow (`INC0010001`); cualquier otro texto se rechaza.
+- Un estado desconocido, un valor fuera de rango o un campo que no existe en la tabla `incident` lanzan `ServicenowDataError` y no se modifica nada.
+- Para resolver (6) o cerrar (7) la instancia suele exigir `close_code` y `close_notes`; consulta los códigos válidos con `client.get_choice_values("incident", "close_code")`.
+
 ## Capacidad 1 — Crear incidente
 
 ```python
